@@ -443,37 +443,38 @@ class AgentA2C(AgentZero):
     def act(self, state):
         self.actor.eval()
         with torch.no_grad():
-            mu, var = self.actor(state)
-        dist = torch.distributions.Normal(
-            loc=mu,
-            scale=torch.sqrt(var)
-        )
+            action, dist = self.actor(state)
 
-        action = dist.sample()
-        action = torch.clamp(action, -1, 1)
-        action = action.cpu().data.numpy()
+        selected_action = dist.mean
+        selected_action = torch.clamp(action, -1, 1)
+        selected_action = action.cpu().data.numpy()
         self.actor.train()
 
-        return action
+        return selected_action
 
     def optimize_models(self, storage):
-        # Optimize models
-        self.critic_optimizer.zero_grad()
-        self.actor_optimizer.zero_grad()
-
         # Critic Loss
+
         V, R, A = storage.cat(['action_values', 'returns', 'advantages'])
-        value_loss = (R - V).pow(2).mean()
+        value_loss = F.smooth_l1_loss(V, R.detach())
+        
+        
+        self.critic_optimizer.zero_grad()
+        value_loss.backward(retain_graph=True)
+        self.critic_optimizer.step()
+        
 
         # Actor Loss
         L_p = torch.tensor(storage.log_probs, dtype=torch.float)
         Ent = torch.tensor(storage.entropies, dtype=torch.float)
         policy_loss = -(L_p * A).mean()
         entropy_loss = Ent.mean()
-        (policy_loss + self.entropy_beta*entropy_loss).backward()
 
-        self.critic_optimizer.step()
+        
+        self.actor_optimizer.zero_grad()
+        (policy_loss + self.entropy_beta*entropy_loss).backward()
         self.actor_optimizer.step()
+        
 
     def train(self, episodes):
         # Initialize episodes counter, storage and initial state
@@ -500,13 +501,7 @@ class AgentA2C(AgentZero):
                     to(self.device)
 
                 # retrieve action
-                mu, var = self.actor(state)
-                dist = torch.distributions.Normal(
-                    loc=mu,
-                    scale=torch.exp(self.actor.logstd)
-                )
-
-                action = dist.sample()
+                action, dist = self.actor(state)
                 action = torch.clamp(action, -1, 1)
                 log_prob = dist.log_prob(action).sum(-1).unsqueeze(-1)
                 entropy = dist.entropy().sum(-1).unsqueeze(-1)
@@ -549,8 +544,7 @@ class AgentA2C(AgentZero):
                 next_value = self.critic(torch.tensor(
                     state, dtype=torch.float)).detach().numpy()[0]
 
-            # Calculate returns and advantages
-
+            # Calculate returns (target values) and advantages
             R = np.append(
                 np.zeros_like(
                     storage.rewards
@@ -566,8 +560,10 @@ class AgentA2C(AgentZero):
             for t in range(storage.size):
                 storage.returns[t] = torch.tensor(R[t], dtype=torch.float).\
                     unsqueeze(-1)
-                storage.advantages[t] = storage.returns[t] - \
-                    storage.action_values[t]
+                storage.advantages[t] = (
+                    storage.returns[t]
+                    - storage.action_values[t]
+                    )
 
             # Optimize Models
             self.optimize_models(storage)

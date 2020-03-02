@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from torch.distributions import Normal
 import math
 
 
@@ -106,20 +106,26 @@ class ActorA2C(nn.Module):
             nn.Tanh(),
         )
 
-        self.var = nn.Sequential(
+        self.log_std = nn.Sequential(
             nn.Linear(64, act_size),
             nn.Softplus()
         )
 
-        self.logstd = nn.Parameter(torch.zeros(act_size))
         self.reset_parameters()
 
     def forward(self, state):
-        return self.mu(self.base(state)), self.var(self.base(state))
+        mu = self.mu(self.base(state))
+        log_std = self.log_std(self.base(state))
+        std = torch.exp(log_std)
+
+        dist = Normal(mu, std)
+        action = dist.sample()
+
+        return action, dist
 
     def reset_parameters(self):
         self.base.apply(weight_reset)
-        self.var.apply(weight_reset)
+        self.log_std.apply(weight_reset)
         self.mu.apply(weight_reset)
 
 
