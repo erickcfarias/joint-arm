@@ -1,4 +1,4 @@
-# Deep Q Learning Project: Banana Navigation
+# Reinforcement Learning Project: Double-jointed arm
 
 ### Introduction
 
